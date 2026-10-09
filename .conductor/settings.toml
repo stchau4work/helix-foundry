@@ -1,0 +1,13 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "./.conductor/setup.sh"
+# Each workspace gets its own ports, .data and HelixDB container (see run.sh).
+run_mode = "concurrent"
+archive = "./.conductor/archive.sh"
+
+[scripts.run.dev]
+available_in = [ "local" ]
+command = "./.conductor/run.sh"
+default = true
+icon = "play"
