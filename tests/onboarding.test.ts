@@ -467,6 +467,33 @@ it("requires a key for a new hosted provider without changing the setup step", a
   expect((await onboardingState(store, scope)).step).toBe("ai");
   expect(await store.list(scope, "job")).toHaveLength(0);
 });
+it("sets up the Claude subscription provider without an API key", async () => {
+  await inputs();
+  await request("POST", "/onboarding/provider", {
+    provider: "claude",
+    model: "test",
+    apiKey: "private-claude-key",
+  });
+  const r = await request("POST", "/onboarding/provider", {
+    provider: "claude-code",
+    model: "opus",
+  });
+  expect(r.statusCode, r.body).toBe(200);
+  const job = (await store.get(scope, r.json().id))!;
+  expect(job.data.hasKey).toBe(false);
+  vi.spyOn(Provider.prototype, "generate").mockResolvedValueOnce({
+    value: { ready: true, message: "Connected" },
+    tokens: 5,
+  });
+  await prepareProvider(store, scope, job);
+  const saved = (await store.get(scope, "provider"))!;
+  expect(saved.data.settings).toMatchObject({
+    provider: "claude-code",
+    model: "opus",
+  });
+  expect(saved.data.secret).toBeNull();
+  expect((await onboardingState(store, scope)).providerReady).toBe(true);
+});
 it("keeps active provider on failed tests, masks preparation secrets and activates only the selected provider", async () => {
   await inputs();
   const r = await request("POST", "/onboarding/provider", {

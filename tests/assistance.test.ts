@@ -242,68 +242,69 @@ it("grounds follow-ups in authorized prior answers and denies foreign or secret 
   }
   expect(model).toHaveBeenCalledTimes(3);
 });
-it("preserves cancellation and masks hosted record context", async () => {
-  const { store, scope, plan } = await fixture();
-  await transaction(store, scope, async (tx) => {
-    const w = await tx.get("workspace");
-    tx.update(w!, { activeGeneration: "g" });
-    tx.put(
-      resource(
-        scope,
-        "object",
-        "Order",
-        {
-          generation: "g",
-          logicalId: "a",
-          type: "Order",
-          base: { email: "private@example.com", amount: 25 },
-        },
-        "g_a",
-      ),
+for (const provider of ["openai", "claude-code"] as const)
+  it(`preserves cancellation and masks hosted record context (${provider})`, async () => {
+    const { store, scope, plan } = await fixture();
+    await transaction(store, scope, async (tx) => {
+      const w = await tx.get("workspace");
+      tx.update(w!, { activeGeneration: "g" });
+      tx.put(
+        resource(
+          scope,
+          "object",
+          "Order",
+          {
+            generation: "g",
+            logicalId: "a",
+            type: "Order",
+            base: { email: "private@example.com", amount: 25 },
+          },
+          "g_a",
+        ),
+      );
+      tx.put(
+        resource(
+          scope,
+          "provider",
+          "Hosted AI",
+          { settings: { provider, model: "test" } },
+          "provider",
+        ),
+      );
+    });
+    const model = vi
+      .spyOn(Provider.prototype, "generate")
+      .mockResolvedValueOnce({ value: { intent: "answer" }, tokens: 1 })
+      .mockResolvedValueOnce({ value: plan, tokens: 1 });
+    const r = await enqueue(
+      store,
+      scope,
+      "Explain this order",
+      undefined,
+      { resourceId: "g_a" },
+      false,
+      "auto",
+      { userId: "actor", readOnly: false },
     );
-    tx.put(
-      resource(
-        scope,
-        "provider",
-        "OpenAI",
-        { settings: { provider: "openai", model: "test" } },
-        "provider",
-      ),
+    await buildWorkspace(store, scope, r.id);
+    expect((model.mock.calls[1][1] as any).resource.values).toBeUndefined();
+    expect(JSON.stringify(model.mock.calls[1][1])).not.toContain(
+      "private@example.com",
     );
+    const canceled = await enqueue(
+      store,
+      scope,
+      "Do something",
+      undefined,
+      undefined,
+      false,
+      "auto",
+    );
+    await transaction(store, scope, async (tx) => {
+      const c = await tx.get(canceled.id);
+      tx.update(c!, { ...c!.data, status: "canceled" });
+    });
+    await buildWorkspace(store, scope, canceled.id);
+    expect((await store.get(scope, canceled.id))?.data.status).toBe("canceled");
+    expect(model).toHaveBeenCalledTimes(2);
   });
-  const model = vi
-    .spyOn(Provider.prototype, "generate")
-    .mockResolvedValueOnce({ value: { intent: "answer" }, tokens: 1 })
-    .mockResolvedValueOnce({ value: plan, tokens: 1 });
-  const r = await enqueue(
-    store,
-    scope,
-    "Explain this order",
-    undefined,
-    { resourceId: "g_a" },
-    false,
-    "auto",
-    { userId: "actor", readOnly: false },
-  );
-  await buildWorkspace(store, scope, r.id);
-  expect((model.mock.calls[1][1] as any).resource.values).toBeUndefined();
-  expect(JSON.stringify(model.mock.calls[1][1])).not.toContain(
-    "private@example.com",
-  );
-  const canceled = await enqueue(
-    store,
-    scope,
-    "Do something",
-    undefined,
-    undefined,
-    false,
-    "auto",
-  );
-  await transaction(store, scope, async (tx) => {
-    const c = await tx.get(canceled.id);
-    tx.update(c!, { ...c!.data, status: "canceled" });
-  });
-  await buildWorkspace(store, scope, canceled.id);
-  expect((await store.get(scope, canceled.id))?.data.status).toBe("canceled");
-  expect(model).toHaveBeenCalledTimes(2);
-});

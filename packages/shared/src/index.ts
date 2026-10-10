@@ -69,7 +69,8 @@ export type HostedConnection = {
   discovery: any;
 };
 export const ProviderSchema = z.object({
-  provider: z.enum(["local", "claude", "openai"]),
+  // claude-code runs the user's own signed-in Claude Code CLI (their subscription).
+  provider: z.enum(["local", "claude", "claude-code", "openai"]),
   model: z.string().min(1).max(150),
   baseUrl: z.url().optional(),
   apiKey: z.string().optional(),

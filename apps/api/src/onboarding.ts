@@ -85,8 +85,10 @@ export function registerOnboarding(
         else if (selected.provider === old.provider)
           selected.apiKey = old.apiKey;
       }
+      // Local and the Claude Code CLI (the user's own sign-in) need no key.
       assert(
-        selected.provider === "local" || !!selected.apiKey?.trim(),
+        ["local", "claude-code"].includes(selected.provider) ||
+          !!selected.apiKey?.trim(),
         "Enter an API key for the selected provider.",
       );
       const fingerprint = digest(JSON.stringify(selected));
