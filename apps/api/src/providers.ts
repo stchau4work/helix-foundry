@@ -1,12 +1,16 @@
 import { z } from "zod";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   ModelProvider,
   ProviderSettings,
 } from "../../../packages/shared/src/index.js";
 import { config } from "./config.js";
-import { assert, AppError } from "./security.js";
+import { assert, AppError, redact } from "./security.js";
 export class Provider implements ModelProvider {
   private verified = false;
   constructor(public settings: ProviderSettings) {}
@@ -22,6 +26,14 @@ export class Provider implements ModelProvider {
     }
     const s = this.settings,
       user = JSON.stringify(context);
+    if (s.provider === "claude-code")
+      return runClaudeCode(
+        system,
+        user,
+        schema,
+        s.model,
+        signal || AbortSignal.timeout(s.timeoutSeconds * 1000),
+      );
     let url: string,
       headers: Record<string, string> = { "content-type": "application/json" },
       body: any;
@@ -72,6 +84,7 @@ export class Provider implements ModelProvider {
         tool_choice: { type: "tool", name: "submit" },
       };
     } else {
+      assert(s.provider === "openai", "Unknown AI provider");
       assert(s.apiKey, "OpenAI API key is required");
       url = "https://api.openai.com/v1/responses";
       headers.authorization = "Bearer " + s.apiKey;
@@ -166,6 +179,125 @@ function postLocal(url: string, body: string, signal: AbortSignal) {
     req.on("error", (error) => reject(signal.aborted ? signal.reason : error));
     req.end(body);
   });
+}
+// The user's own Claude Code CLI, signed in with their subscription: headless,
+// with no tools, settings, MCP servers or project files, in an empty folder.
+// It gets only the variables it needs, so it never sees this app's keys, and an
+// exported ANTHROPIC_API_KEY cannot take the place of the subscription.
+async function runClaudeCode(
+  system: string,
+  user: string,
+  schema: Record<string, unknown>,
+  model: string,
+  signal: AbortSignal,
+) {
+  const cwd = await mkdtemp(join(tmpdir(), "helix-claude-"));
+  const env = Object.fromEntries(
+    [
+      "PATH",
+      "HOME",
+      "USER",
+      "LOGNAME",
+      "LANG",
+      "TMPDIR",
+      "SHELL",
+      "CLAUDE_CONFIG_DIR",
+    ]
+      .filter((k) => process.env[k] !== undefined)
+      .map((k) => [k, process.env[k]]),
+  );
+  try {
+    // The CLI's validator does not know zod's draft 2020-12 dialect URI.
+    const { $schema: _dialect, ...cliSchema } = schema;
+    const { code, stdout, stderr } = await new Promise<{
+      code: number | null;
+      stdout: string;
+      stderr: string;
+    }>((resolve, reject) => {
+      const child = spawn(
+        config.claudeBin,
+        [
+          "-p",
+          "--output-format",
+          "json",
+          "--json-schema",
+          JSON.stringify(cliSchema),
+          "--system-prompt",
+          system,
+          "--model",
+          model,
+          "--tools",
+          "",
+          "--setting-sources",
+          "",
+          "--strict-mcp-config",
+          "--disable-slash-commands",
+          "--no-session-persistence",
+        ],
+        { cwd, env, signal, stdio: "pipe" },
+      );
+      let stdout = "",
+        stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("error", (error: NodeJS.ErrnoException) =>
+        reject(
+          signal.aborted
+            ? signal.reason
+            : error.code === "ENOENT"
+              ? new AppError(
+                  502,
+                  "Claude Code isn't available on this computer. Install Claude Code and sign in, or choose another provider. (This option works only when Helix Foundry runs with pnpm dev, not in Docker.)",
+                )
+              : error,
+        ),
+      );
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+      // The CLI may exit before reading everything; its exit code says why.
+      child.stdin.on("error", () => {});
+      child.stdin.end(user);
+    });
+    let data: any;
+    try {
+      data = JSON.parse(stdout);
+    } catch {
+      const detail = redact(stderr.trim()).slice(0, 300);
+      throw new AppError(
+        502,
+        `Claude Code exited with code ${code}` +
+          (detail
+            ? ": " + detail
+            : ". Check that claude works and is signed in."),
+      );
+    }
+    if (data.is_error || data.subtype !== "success")
+      throw new AppError(
+        502,
+        "Claude Code returned an error: " +
+          redact(String(data.result || data.subtype || "unknown")).slice(
+            0,
+            300,
+          ),
+      );
+    assert(
+      data.structured_output,
+      "Model did not return a structured response",
+      502,
+    );
+    const u = data.usage || {};
+    return {
+      value: withoutNullOptionals(data.structured_output),
+      tokens:
+        (u.input_tokens || 0) +
+        (u.output_tokens || 0) +
+        (u.cache_creation_input_tokens || 0) +
+        (u.cache_read_input_tokens || 0),
+    };
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 }
 // Accepts a single response object or newline-delimited streamed parts.
 function ollamaResult(text: string) {

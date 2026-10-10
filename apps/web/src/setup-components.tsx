@@ -162,6 +162,11 @@ export function ProviderSetup({
           {[
             ["local", "Local", "On your infrastructure."],
             ["claude", "Claude", "Use your Anthropic API key."],
+            [
+              "claude-code",
+              "Claude (subscription)",
+              "Use your Claude plan through Claude Code on this computer.",
+            ],
             ["openai", "OpenAI", "Use your OpenAI API key."],
           ].map(([value, title, description]) => (
             <ChoiceCard
@@ -180,7 +185,9 @@ export function ProviderSetup({
                       ? "qwen3:4b"
                       : value === "claude"
                         ? "claude-sonnet-4-6"
-                        : "gpt-5.4-mini",
+                        : value === "claude-code"
+                          ? "opus"
+                          : "gpt-5.4-mini",
                   baseUrl: value === "local" ? q.data?.baseUrl : undefined,
                   apiKey: "",
                   hasKey: q.data?.provider === value && q.data?.hasKey,
@@ -192,7 +199,7 @@ export function ProviderSetup({
                 ) : (
                   <img
                     className="provider-logo"
-                    src={`/providers/${value}.svg`}
+                    src={`/providers/${value === "claude-code" ? "claude" : value}.svg`}
                     alt=""
                     aria-hidden="true"
                   />
@@ -201,7 +208,7 @@ export function ProviderSetup({
             />
           ))}
         </div>
-        {s.provider !== "local" && (
+        {!["local", "claude-code"].includes(s.provider) && (
           <label>
             API key
             <input

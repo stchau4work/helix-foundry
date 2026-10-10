@@ -94,6 +94,7 @@ const setupTasks: Record<string, [string, string]> = {
 const providers: Record<string, string> = {
   local: "the local AI model",
   claude: "Claude",
+  "claude-code": "Claude (your subscription)",
   openai: "OpenAI",
 };
 // Describes a job, run or audit resource (or the slim copy the event stream sends).
